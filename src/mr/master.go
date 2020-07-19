@@ -1,6 +1,9 @@
 package mr
 
-import "log"
+import (
+	"fmt"
+	"log"
+)
 import "net"
 import "os"
 import "net/rpc"
@@ -35,6 +38,7 @@ func (m *Master) server() {
 	sockname := masterSock()
 	os.Remove(sockname)
 	l, e := net.Listen("unix", sockname)
+	fmt.Printf("Master is listening...")
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
@@ -64,6 +68,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 
 	// Your code here.
 
+	fmt.Printf("Making Master")
 
 	m.server()
 	return &m
