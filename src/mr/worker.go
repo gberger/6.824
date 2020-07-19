@@ -1,6 +1,12 @@
 package mr
 
-import "fmt"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"encoding/json"
+	"time"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
@@ -24,41 +30,112 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+func getReduceTaskNumber(key string, numTasks int) int {
+	return ihash(key) % numTasks
+}
 
 //
 // main/mrworker.go calls this function.
 //
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
-	fmt.Println("Worker starting")
+	fmt.Println("Worker starting.\n")
+	time.Sleep(time.Second)
 
-	// uncomment to send the Example RPC to the master.
-	CallExample()
+	for {
+		task := GetTask()
 
+		if task.TaskType == WaitTaskType {
+			fmt.Printf("Master asked us to wait.\n")
+		} else if task.TaskType == DieTaskType {
+			fmt.Printf("Master asked us to die.\n")
+			os.Exit(0)
+		} else if task.TaskType == MapTaskType {
+			fmt.Printf("Running mapf for task %d (%v)\n", task.TaskNum, task.Filename)
+			result := mapf(task.Filename, readFile(task.Filename))
+			fmt.Printf("Writing results for task %d (%v)\n", task.TaskNum, task.Filename)
+			writeIntermediateFiles(result, task.TaskNum, task.NumReduceTasks)
+			ReportTask(task.TaskType, task.TaskNum, Done)
+		} else if task.TaskType == ReduceTaskType {
+			// TODO
+			fmt.Printf("Running reducef for task %d\n", task.TaskNum)
+			os.Exit(1)
+		}
+
+		time.Sleep(time.Second)
+	}
 }
 
-//
-// example function to show how to make an RPC call to the master.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func CallExample() {
+func GetTask() GetTaskReply {
+	fmt.Printf("Asking for task...\n")
+	args := GetTaskArgs{}
+	reply := GetTaskReply{}
+	call("Master.GetTask", &args, &reply)
+	return reply
+}
 
-	// declare an argument structure.
-	args := ExampleArgs{}
+func ReportTask(taskType TaskType, taskNum int, taskState TaskState) ReportTaskReply {
+	fmt.Printf("Reporting %v task %d as %v...\n", taskType, taskNum, taskState)
+	args := ReportTaskArgs{
+		TaskType: taskType,
+		TaskNum: taskNum,
+		TaskState: taskState,
+	}
+	reply := ReportTaskReply{}
+	call("Master.ReportTask", &args, &reply)
+	return reply
+}
 
-	// fill in the argument(s).
-	args.X = 99
+func readFile(filename string) string {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	defer file.Close()
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	return string(content)
+}
 
-	// declare a reply structure.
-	reply := ExampleReply{}
+func writeIntermediateFiles(pairs []KeyValue, taskNum int, numReduceTasks int) {
+	// Create intermediate files
+	filenames := make([]string, numReduceTasks)
+	files := make([]*os.File, numReduceTasks)
+	encoders := make([]*json.Encoder, numReduceTasks)
+	reduceTask := 0
+	for reduceTask < numReduceTasks {
+		filename := getFilenameForTask(taskNum, reduceTask)
+		ofile, err := os.Create(filename)
+		if err != nil {
+			log.Fatalf("cannot create %v", filename)
+		}
+		filenames[reduceTask] = filename
+		files[reduceTask] = ofile
+		encoders[reduceTask] = json.NewEncoder(ofile)
+		reduceTask += 1
+	}
 
-	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
+	// Go through KeyValue pairs and write to the appropriate file
+	for _, kv := range pairs {
+		reduceTaskNum := getReduceTaskNumber(kv.Key, numReduceTasks)
+		encoder := encoders[reduceTaskNum]
+		if err := encoder.Encode(kv); err != nil {
+			log.Fatalf("cannot write JSON to file %v", filenames[reduceTask])
+		}
+	}
 
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	// Close files
+	for _, file := range files {
+		if err := file.Close(); err != nil {
+			log.Fatalf("cannot close file")
+		}
+	}
+}
+
+func getFilenameForTask(mapTask int, reduceTask int) string {
+	return fmt.Sprintf("mr-%d-%d", mapTask, reduceTask)
 }
 
 //
@@ -71,7 +148,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	sockname := masterSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		log.Fatal("dialing: ", err)
 	}
 	defer c.Close()
 
@@ -83,3 +160,4 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	fmt.Println(err)
 	return false
 }
+
