@@ -120,7 +120,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			ReportTask(task.TaskType, task.TaskNum, Done)
 		}
 
-		time.Sleep(time.Second)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
