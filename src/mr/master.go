@@ -204,6 +204,8 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
+	m.lock.Lock()
+	defer m.lock.Unlock()
 	return m.mapDone && m.reduceDone
 }
 
