@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"encoding/json"
+	"sort"
 	"time"
 )
 import "log"
@@ -19,6 +20,12 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -51,15 +58,66 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			fmt.Printf("Master asked us to die.\n")
 			os.Exit(0)
 		} else if task.TaskType == MapTaskType {
+			fmt.Printf("Master asked us to run a MapTask.\n")
 			fmt.Printf("Running mapf for task %d (%v)\n", task.TaskNum, task.Filename)
 			result := mapf(task.Filename, readFile(task.Filename))
 			fmt.Printf("Writing results for task %d (%v)\n", task.TaskNum, task.Filename)
 			writeIntermediateFiles(result, task.TaskNum, task.NumReduceTasks)
 			ReportTask(task.TaskType, task.TaskNum, Done)
 		} else if task.TaskType == ReduceTaskType {
-			// TODO
-			fmt.Printf("Running reducef for task %d\n", task.TaskNum)
-			os.Exit(1)
+			fmt.Printf("Master asked us to run a ReduceTask.\n")
+
+			// Open files and read into KVA struct
+
+			fmt.Printf("Opening and reading intermediate KVA files.\n")
+			kva := make([]KeyValue, 0)
+			t := 0
+			for t < task.NumMapTasks {
+				filename := getFilenameForTask(t, task.TaskNum)
+				file, err := os.Open(filename)
+				if err != nil {
+					log.Fatalf("cannot open %v", filename)
+				}
+				dec := json.NewDecoder(file)
+				for {
+					var kv KeyValue
+					if err := dec.Decode(&kv); err != nil {
+						break
+					}
+					kva = append(kva, kv)
+				}
+				file.Close()
+				t += 1
+			}
+
+			fmt.Printf("Sorting KVA by the Key.\n")
+			// Sort KVA by Key
+			sort.Sort(ByKey(kva))
+
+			ofilename := getFilenameForReduceTask(task.TaskNum)
+			ofile, err := os.Create(ofilename)
+			if err != nil {
+				log.Fatalf("cannot create %v", ofilename)
+			}
+
+			// call reducef on each distinct key in intermediate[],
+			// and print the result to ofile
+			i := 0
+			for i < len(kva) {
+				j := i + 1
+				for j < len(kva) && kva[j].Key == kva[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, kva[k].Value)
+				}
+				output := reducef(kva[i].Key, values)
+				fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+				i = j
+			}
+
+			ReportTask(task.TaskType, task.TaskNum, Done)
 		}
 
 		time.Sleep(time.Second)
@@ -70,7 +128,10 @@ func GetTask() GetTaskReply {
 	fmt.Printf("Asking for task...\n")
 	args := GetTaskArgs{}
 	reply := GetTaskReply{}
-	call("Master.GetTask", &args, &reply)
+	if !call("Master.GetTask", &args, &reply) {
+		fmt.Printf("Master seems to be dead. Bye!\n")
+		os.Exit(0)
+	}
 	return reply
 }
 
@@ -136,6 +197,10 @@ func writeIntermediateFiles(pairs []KeyValue, taskNum int, numReduceTasks int) {
 
 func getFilenameForTask(mapTask int, reduceTask int) string {
 	return fmt.Sprintf("mr-%d-%d", mapTask, reduceTask)
+}
+
+func getFilenameForReduceTask(reduceTask int) string {
+	return fmt.Sprintf("mr-out-%d", reduceTask)
 }
 
 //

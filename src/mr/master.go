@@ -79,6 +79,7 @@ func (m *Master) GetTask(args *GetTaskArgs, reply *GetTaskReply) error {
 			fmt.Printf("Assigning reduce task %d to worker\n", task.num)
 			reply.TaskType = ReduceTaskType
 			reply.TaskNum = taskNum
+			reply.NumMapTasks = len(m.mapTasks)
 
 			task.state = InProgress
 			task.timeout = time.Now().Add(TimeoutDuration)
@@ -203,12 +204,7 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	ret := false
-
-	// Your code here.
-
-
-	return ret
+	return m.mapDone && m.reduceDone
 }
 
 //

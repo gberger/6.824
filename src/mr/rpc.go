@@ -30,6 +30,7 @@ type GetTaskReply struct {
 	Filename       string
 	TaskNum        int
 	NumReduceTasks int
+	NumMapTasks    int
 }
 
 // ReportTask
